@@ -15,7 +15,7 @@ module load cudnn9.8-cuda12.8/9.8.0.87
 nvidia-smi
 
 # Navigate to project directory
-cd /export/home2/chongtia002/sam-3d-objects
+cd ../sam-3d-objects
 
 export TMPDIR=${PWD}/.tmp
 export TEMP=${PWD}/.tmp
