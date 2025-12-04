@@ -375,7 +375,7 @@ def bake_texture(
     mode: Literal["fast", "opt"] = "opt",
     lambda_tv: float = 1e-2,
     verbose: bool = False,
-    rendering_engine: str = "nvdiffrast",  # nvdiffrast OR "pytorch3d"
+    rendering_engine: str = "pytorch3d",  # nvdiffrast OR "pytorch3d"
     device: str = "cuda",
 
 ):
