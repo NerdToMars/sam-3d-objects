@@ -492,6 +492,7 @@ class InferencePipeline:
         # This should only happen if called from demo
         image = self.merge_image_and_mask(image, mask)
         with self.device:
+            # ss_pre
             ss_input_dict = self.preprocess_image(image, self.ss_preprocessor)
             slat_input_dict = self.preprocess_image(image, self.slat_preprocessor)
             torch.manual_seed(seed)
@@ -501,7 +502,9 @@ class InferencePipeline:
                 use_distillation=use_stage1_distillation,
             )
 
-            ss_return_dict.update(self.pose_decoder(ss_return_dict))
+            pose_output = self.pose_decoder(ss_return_dict)
+            logger.info(f"[SHAPE] SS: Pose decoder returned keys: {list(pose_output.keys())}")
+            ss_return_dict.update(pose_output)
 
             if "scale" in ss_return_dict:
                 logger.info(f"Rescaling scale by {ss_return_dict['downsample_factor']}")
@@ -601,15 +604,21 @@ class InferencePipeline:
         Returns:
             dict: The decoded structured latent.
         """
-        logger.info("Decoding sparse latent...")
+        logger.info(f"[SHAPE] SLAT: decode_slat input - SparseTensor coords: {slat.coords.shape}, feats: {slat.feats.shape}, formats: {formats}")
         ret = {}
         with torch.no_grad():
             if "mesh" in formats:
+                logger.info(f"[SHAPE] SLAT: Decoding to mesh...")
                 ret["mesh"] = self.models["slat_decoder_mesh"](slat)
+                logger.info(f"[SHAPE] SLAT: Mesh decoder output - {len(ret['mesh'])} mesh(es)")
             if "gaussian" in formats:
+                logger.info(f"[SHAPE] SLAT: Decoding to gaussian...")
                 ret["gaussian"] = self.models["slat_decoder_gs"](slat)
+                logger.info(f"[SHAPE] SLAT: Gaussian decoder output - {len(ret['gaussian'])} gaussian(s)")
             if "gaussian_4" in formats:
+                logger.info(f"[SHAPE] SLAT: Decoding to gaussian_4...")
                 ret["gaussian_4"] = self.models["slat_decoder_gs_4"](slat)
+                logger.info(f"[SHAPE] SLAT: Gaussian_4 decoder output - {len(ret['gaussian_4'])} gaussian(s)")
         # if "radiance_field" in formats:
         #     ret["radiance_field"] = self.models["slat_decoder_rf"](slat)
         return ret
@@ -619,7 +628,15 @@ class InferencePipeline:
 
     def embed_condition(self, condition_embedder, *args, **kwargs):
         if condition_embedder is not None:
+            logger.info(f"[SHAPE] SS: Embedding condition with {len(args)} args and {len(kwargs)} kwargs")
+            for i, arg in enumerate(args):
+                if isinstance(arg, torch.Tensor):
+                    logger.info(f"[SHAPE] SS: Condition arg {i} shape: {arg.shape}")
+            for k, v in kwargs.items():
+                if isinstance(v, torch.Tensor):
+                    logger.info(f"[SHAPE] SS: Condition kwarg '{k}' shape: {v.shape}")
             tokens = condition_embedder(*args, **kwargs)
+            logger.info(f"[SHAPE] SS: Embedded condition tokens shape: {tokens.shape}")
             return tokens, None, None
         return None, args, kwargs
 
@@ -628,6 +645,13 @@ class InferencePipeline:
         condition_kwargs = {
             k: v for k, v in input_dict.items() if k not in input_mapping
         }
+        logger.info(f"[SHAPE] SS: get_condition_input - input_mapping: {input_mapping}, condition_args count: {len(condition_args)}, condition_kwargs keys: {list(condition_kwargs.keys())}")
+        for i, arg in enumerate(condition_args):
+            if isinstance(arg, torch.Tensor):
+                logger.info(f"[SHAPE] SS: Condition arg {i} (from mapping) shape: {arg.shape}")
+        for k, v in condition_kwargs.items():
+            if isinstance(v, torch.Tensor):
+                logger.info(f"[SHAPE] SS: Condition kwarg '{k}' shape: {v.shape}")
         logger.info("Running condition embedder ...")
         embedded_cond, condition_args, condition_kwargs = self.embed_condition(
             condition_embedder, *condition_args, **condition_kwargs
@@ -636,6 +660,7 @@ class InferencePipeline:
         if embedded_cond is not None:
             condition_args = (embedded_cond,)
             condition_kwargs = {}
+            logger.info(f"[SHAPE] SS: Final condition_args shape: {embedded_cond.shape}, condition_kwargs: {condition_kwargs}")
 
         return condition_args, condition_kwargs
 
@@ -675,14 +700,17 @@ class InferencePipeline:
                         k: (bs,) + (v.pos_emb.shape[0], v.input_layer.in_features)
                         for k, v in ss_generator.reverse_fn.backbone.latent_mapping.items()
                     }
+                    logger.info(f"[SHAPE] SS: MoT latent_shape_dict: {latent_shape_dict}")
                 else:
                     latent_shape_dict = (bs,) + (4096, 8)
+                    logger.info(f"[SHAPE] SS: Non-MoT latent_shape_dict: {latent_shape_dict}")
 
                 condition_args, condition_kwargs = self.get_condition_input(
                     self.condition_embedders["ss_condition_embedder"],
                     ss_input_dict,
                     self.ss_condition_input_mapping,
                 )
+                logger.info(f"[SHAPE] SS: Calling ss_generator with latent_shape_dict and condition")
                 return_dict = ss_generator(
                     latent_shape_dict,
                     image.device,
@@ -692,25 +720,33 @@ class InferencePipeline:
                 if not self.is_mm_dit():
                     return_dict = {"shape": return_dict}
 
+                logger.info(f"[SHAPE] SS: Generator output return_dict keys: {list(return_dict.keys())}")
+                for k, v in return_dict.items():
+                    if isinstance(v, torch.Tensor):
+                        logger.info(f"[SHAPE] SS: Generator output '{k}' shape: {v.shape}")
+
                 shape_latent = return_dict["shape"]
-                ss = ss_decoder(
-                    shape_latent.permute(0, 2, 1)
-                    .contiguous()
-                    .view(shape_latent.shape[0], 8, 16, 16, 16)
-                )
+                logger.info(f"[SHAPE] SS: shape_latent before decoder: {shape_latent.shape}")
+                shape_latent_reshaped = shape_latent.permute(0, 2, 1).contiguous().view(shape_latent.shape[0], 8, 16, 16, 16)
+                logger.info(f"[SHAPE] SS: shape_latent reshaped for decoder: {shape_latent_reshaped.shape}")
+                ss = ss_decoder(shape_latent_reshaped)
+                logger.info(f"[SHAPE] SS: SS decoder output shape: {ss.shape}")
                 coords = torch.argwhere(ss > 0)[:, [0, 2, 3, 4]].int()
+                logger.info(f"[SHAPE] SS: Coords after argwhere: {coords.shape} (N_active_voxels, 4)")
 
                 # downsample output
                 return_dict["coords_original"] = coords
                 original_shape = coords.shape
+                logger.info(f"[SHAPE] SS: Coords before downsampling: {original_shape}")
                 if self.downsample_ss_dist > 0:
                     coords = prune_sparse_structure(
                         coords,
                         max_neighbor_axes_dist=self.downsample_ss_dist,
                     )
+                    logger.info(f"[SHAPE] SS: Coords after pruning: {coords.shape}")
                 coords, downsample_factor = downsample_sparse_structure(coords)
                 logger.info(
-                    f"Downsampled coords from {original_shape[0]} to {coords.shape[0]}"
+                    f"[SHAPE] SS: Downsampled coords from {original_shape[0]} to {coords.shape[0]}, downsample_factor: {downsample_factor}"
                 )
                 return_dict["coords"] = coords
                 return_dict["downsample_factor"] = downsample_factor
@@ -729,6 +765,8 @@ class InferencePipeline:
         DEVICE = image.device
         slat_generator = self.models["slat_generator"]
         latent_shape = (image.shape[0],) + (coords.shape[0], 8)
+        logger.info(f"[SHAPE] SLAT: Input coords shape: {coords.shape}")
+        logger.info(f"[SHAPE] SLAT: Latent shape for generator: {latent_shape}")
         prev_inference_steps = slat_generator.inference_steps
         if inference_steps:
             slat_generator.inference_steps = inference_steps
@@ -754,15 +792,20 @@ class InferencePipeline:
                     slat_input,
                     self.slat_condition_input_mapping,
                 )
+                logger.info(f"[SHAPE] SLAT: Condition args/kwargs prepared, adding coords")
                 condition_args += (coords.cpu().numpy(),)
+                logger.info(f"[SHAPE] SLAT: Calling slat_generator with latent_shape: {latent_shape}")
                 slat = slat_generator(
                     latent_shape, DEVICE, *condition_args, **condition_kwargs
                 )
+                logger.info(f"[SHAPE] SLAT: Generator output shape: {slat[0].shape if isinstance(slat, tuple) else slat.shape}")
                 slat = sp.SparseTensor(
                     coords=coords,
                     feats=slat[0],
                 ).to(DEVICE)
+                logger.info(f"[SHAPE] SLAT: SparseTensor created - coords: {slat.coords.shape}, feats: {slat.feats.shape}")
                 slat = slat * self.slat_std.to(DEVICE) + self.slat_mean.to(DEVICE)
+                logger.info(f"[SHAPE] SLAT: After normalization - feats: {slat.feats.shape}")
 
         slat_generator.inference_steps = prev_inference_steps
         return slat
@@ -795,20 +838,27 @@ class InferencePipeline:
         self, image: Union[Image.Image, np.ndarray], preprocessor
     ) -> torch.Tensor:
         # canonical type is numpy
-        if not isinstance(input, np.ndarray):
+        if not isinstance(image, np.ndarray):
             image = np.array(image)
 
         assert image.ndim == 3  # no batch dimension as of now
         assert image.shape[-1] == 4  # rgba format
         assert image.dtype == np.uint8  # [0,255] range
 
+        logger.info(f"[SHAPE] SLAT: Raw input image shape: {image.shape} (H, W, 4 RGBA)")
+
         rgba_image = torch.from_numpy(self.image_to_float(image))
         rgba_image = rgba_image.permute(2, 0, 1).contiguous()
         rgb_image = rgba_image[:3]
         rgb_image_mask = (get_mask(rgba_image, None, "ALPHA_CHANNEL") > 0).float()
+        
+        logger.info(f"[SHAPE] SLAT: After permute - rgba_image: {rgba_image.shape}, rgb_image: {rgb_image.shape}, rgb_image_mask: {rgb_image_mask.shape}")
+        
         processed_rgb_image, processed_mask = self._preprocess_image_and_mask(
             rgb_image, rgb_image_mask, preprocessor.img_mask_joint_transform
         )
+        
+        logger.info(f"[SHAPE] SLAT: After joint transforms - processed_rgb_image: {processed_rgb_image.shape}, processed_mask: {processed_mask.shape}")
 
         # transform tensor to model input
         processed_rgb_image = self._apply_transform(
@@ -817,18 +867,25 @@ class InferencePipeline:
         processed_mask = self._apply_transform(
             processed_mask, preprocessor.mask_transform
         )
+        
+        logger.info(f"[SHAPE] SLAT: After img/mask transforms - processed_rgb_image: {processed_rgb_image.shape}, processed_mask: {processed_mask.shape}")
 
         # full image, with only processing from the image
         rgb_image = self._apply_transform(rgb_image, preprocessor.img_transform)
         rgb_image_mask = self._apply_transform(
             rgb_image_mask, preprocessor.mask_transform
         )
+        
+        logger.info(f"[SHAPE] SLAT: After full image transforms - rgb_image: {rgb_image.shape}, rgb_image_mask: {rgb_image_mask.shape}")
+        
         item = {
             "mask": processed_mask[None].to(self.device),
             "image": processed_rgb_image[None].to(self.device),
             "rgb_image": rgb_image[None].to(self.device),
             "rgb_image_mask": rgb_image_mask[None].to(self.device),
         }
+        
+        logger.info(f"[SHAPE] SLAT: Final preprocessed items - mask: {item['mask'].shape}, image: {item['image'].shape}, rgb_image: {item['rgb_image'].shape}, rgb_image_mask: {item['rgb_image_mask'].shape}")
 
         return item
 

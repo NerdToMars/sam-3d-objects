@@ -10,6 +10,7 @@ from ..modules.norm import LayerNorm32
 from ..modules import sparse as sp
 from ..modules.sparse.transformer import ModulatedSparseTransformerCrossBlock
 from .sparse_structure_flow import TimestepEmbedder
+from loguru import logger
 
 
 class SparseResBlock3d(nn.Module):
@@ -268,11 +269,17 @@ class SLatFlowModel(nn.Module):
     def forward(
         self, x: sp.SparseTensor, t: torch.Tensor, cond: torch.Tensor, d: torch.Tensor = None
     ) -> sp.SparseTensor:
+        logger.info(f"[SHAPE] SLAT: SLatFlowModel input - SparseTensor coords: {x.coords.shape}, feats: {x.feats.shape}, t: {t.shape}, cond: {cond.shape}")
+        if d is not None:
+            logger.info(f"[SHAPE] SLAT: SLatFlowModel input - d: {d.shape}")
         h = self.input_layer(x).type(self.dtype)
+        logger.info(f"[SHAPE] SLAT: After input_layer - coords: {h.coords.shape}, feats: {h.feats.shape}")
         t_emb = self.t_embedder(t)
+        logger.info(f"[SHAPE] SLAT: Timestep embedding - t_emb: {t_emb.shape}")
         if d is not None:
             d_emb = self.d_embedder(d)
             t_emb = t_emb + d_emb
+            logger.info(f"[SHAPE] SLAT: After adding d_emb - t_emb: {t_emb.shape}")
         if self.share_mod:
             t_emb = self.adaLN_modulation(t_emb)
         t_emb = t_emb.type(self.dtype)
@@ -280,24 +287,30 @@ class SLatFlowModel(nn.Module):
 
         skips = []
         # pack with input blocks
-        for block in self.input_blocks:
+        for i, block in enumerate(self.input_blocks):
             h = block(h, t_emb)
             skips.append(h.feats)
+        logger.info(f"[SHAPE] SLAT: After input_blocks - coords: {h.coords.shape}, feats: {h.feats.shape}, num_skips: {len(skips)}")
 
         if self.pe_mode == "ape":
             h = h + self.pos_embedder(h.coords[:, 1:]).type(self.dtype)
-        for block in self.blocks:
+            logger.info(f"[SHAPE] SLAT: After positional embedding - feats: {h.feats.shape}")
+        for i, block in enumerate(self.blocks):
             h = block(h, t_emb, cond)
+        logger.info(f"[SHAPE] SLAT: After transformer blocks - coords: {h.coords.shape}, feats: {h.feats.shape}")
 
         # unpack with output blocks
-        for block, skip in zip(self.out_blocks, reversed(skips)):
+        for i, (block, skip) in enumerate(zip(self.out_blocks, reversed(skips))):
             if self.use_skip_connection:
                 h = block(h.replace(torch.cat([h.feats, skip], dim=1)), t_emb)
+                logger.info(f"[SHAPE] SLAT: Output block {i} with skip - feats: {h.feats.shape}")
             else:
                 h = block(h, t_emb)
+        logger.info(f"[SHAPE] SLAT: After output_blocks - coords: {h.coords.shape}, feats: {h.feats.shape}")
 
         h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
         h = self.out_layer(h.type(x.dtype))
+        logger.info(f"[SHAPE] SLAT: SLatFlowModel output - coords: {h.coords.shape}, feats: {h.feats.shape}")
         return h
 
 

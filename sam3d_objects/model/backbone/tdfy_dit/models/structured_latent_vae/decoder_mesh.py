@@ -181,12 +181,21 @@ class SLatMeshDecoder(SparseTransformerBase):
         return ret
 
     def forward(self, x: sp.SparseTensor) -> List[MeshExtractResult]:
+        logger.info(f"[SHAPE] SLAT: SLatMeshDecoder input - SparseTensor coords: {x.coords.shape}, feats: {x.feats.shape}")
         h = super().forward(x)
-        for block in self.upsample:
+        logger.info(f"[SHAPE] SLAT: After super().forward - coords: {h.coords.shape}, feats: {h.feats.shape}")
+        for i, block in enumerate(self.upsample):
             h = block(h)
+            logger.info(f"[SHAPE] SLAT: After upsample block {i} - coords: {h.coords.shape}, feats: {h.feats.shape}")
         h = h.type(x.dtype)
         h = self.out_layer(h)
-        return self.to_representation(h)
+        logger.info(f"[SHAPE] SLAT: After out_layer - coords: {h.coords.shape}, feats: {h.feats.shape}")
+        meshes = self.to_representation(h)
+        logger.info(f"[SHAPE] SLAT: Mesh decoder output - {len(meshes)} mesh(es)")
+        if len(meshes) > 0:
+            m = meshes[0]
+            logger.info(f"[SHAPE] SLAT: First mesh attributes - vertices: {m.vertices.shape}, faces: {m.faces.shape}, textures: {m.textures.shape if hasattr(m, 'textures') and m.textures is not None else 'None'}")
+        return meshes
 
 
 class SLatMeshDecoderTdfyWrapper(SLatMeshDecoder):

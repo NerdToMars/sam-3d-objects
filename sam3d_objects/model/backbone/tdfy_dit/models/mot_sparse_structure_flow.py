@@ -15,6 +15,7 @@ from sam3d_objects.data.utils import (
 )
 from .timestep_embedder import TimestepEmbedder
 from omegaconf import OmegaConf
+from loguru import logger
 
 class SparseStructureFlowModel(nn.Module):
     def __init__(
@@ -209,6 +210,12 @@ class SparseStructureFlowTdfyWrapper(SparseStructureFlowModel):
         *condition_args,
         **condition_kwargs,
     ) -> dict:
+        logger.info(f"[SHAPE] SS: MoT forward - input latents_dict keys: {list(latents_dict.keys())}")
+        for k, v in latents_dict.items():
+            if isinstance(v, torch.Tensor):
+                logger.info(f"[SHAPE] SS: MoT input '{k}' shape: {v.shape}")
+        logger.info(f"[SHAPE] SS: MoT forward - t: {t.shape}, condition_args count: {len(condition_args)}")
+        
         d = condition_kwargs.pop("d", None)
             
         cfg_activate = condition_kwargs.pop("cfg", False)
@@ -217,13 +224,33 @@ class SparseStructureFlowTdfyWrapper(SparseStructureFlowModel):
             cond = cond * 0
         else:
             cond = self.condition_embedder(*condition_args, **condition_kwargs)
+        logger.info(f"[SHAPE] SS: MoT condition embedding shape: {cond.shape}")
 
         # concatenate input
         latent_dict = self.project_input(latents_dict)
+        logger.info(f"[SHAPE] SS: MoT after project_input - latent_dict keys: {list(latent_dict.keys())}")
+        for k, v in latent_dict.items():
+            if isinstance(v, (torch.Tensor, namedtuple)):
+                if isinstance(v, torch.Tensor):
+                    logger.info(f"[SHAPE] SS: MoT projected input '{k}' shape: {v.shape}")
+                else:
+                    logger.info(f"[SHAPE] SS: MoT projected input '{k}' type: {type(v)}")
         output = super().forward(latent_dict, t, cond, d)
+        logger.info(f"[SHAPE] SS: MoT after super().forward - output type: {type(output)}")
+        if isinstance(output, dict):
+            for k, v in output.items():
+                if isinstance(v, (torch.Tensor, namedtuple)):
+                    if isinstance(v, torch.Tensor):
+                        logger.info(f"[SHAPE] SS: MoT super output '{k}' shape: {v.shape}")
+                    else:
+                        logger.info(f"[SHAPE] SS: MoT super output '{k}' type: {type(v)}")
 
         # split input to multiple output modalities
         output_latents = self.project_output(output)
+        logger.info(f"[SHAPE] SS: MoT after project_output - output_latents keys: {list(output_latents.keys())}")
+        for k, v in output_latents.items():
+            if isinstance(v, torch.Tensor):
+                logger.info(f"[SHAPE] SS: MoT final output '{k}' shape: {v.shape}")
 
         return output_latents
 
@@ -238,17 +265,30 @@ class SparseStructureFlowTdfyWrapper(SparseStructureFlowModel):
                 latent_name in latents_dict
             ), f"'{latent_name}' not found in latents_dict"
             latent_input = latents_dict[latent_name]
+            logger.info(f"[SHAPE] SS: MoT project_input - '{latent_name}' input shape: {latent_input.shape}")
             x = self.latent_mapping[latent_name].to_input(latent_input)
+            logger.info(f"[SHAPE] SS: MoT project_input - '{latent_name}' after to_input shape: {x.shape}")
             latent_dict[latent_name] = x
 
         latent_dict = self.merge_latent_share_transformer(latent_dict)
+        logger.info(f"[SHAPE] SS: MoT project_input - after merge_latent_share_transformer, keys: {list(latent_dict.keys())}")
         return latent_dict
 
     def project_output(self, output: Dict) -> Dict:
+        logger.info(f"[SHAPE] SS: MoT project_output - input output keys: {list(output.keys())}")
+        for k, v in output.items():
+            if isinstance(v, (torch.Tensor, namedtuple)):
+                if isinstance(v, torch.Tensor):
+                    logger.info(f"[SHAPE] SS: MoT project_output - '{k}' shape: {v.shape}")
+                else:
+                    logger.info(f"[SHAPE] SS: MoT project_output - '{k}' type: {type(v)}")
         output = self.split_latent_share_transformer(output)
+        logger.info(f"[SHAPE] SS: MoT project_output - after split_latent_share_transformer, keys: {list(output.keys())}")
         output_latents = {}
         for latent_name in self.input_latent_mappings:
+            logger.info(f"[SHAPE] SS: MoT project_output - processing '{latent_name}', input shape: {output[latent_name].shape if isinstance(output[latent_name], torch.Tensor) else type(output[latent_name])}")
             latent = self.latent_mapping[latent_name].to_output(output[latent_name])
+            logger.info(f"[SHAPE] SS: MoT project_output - '{latent_name}' after to_output shape: {latent.shape}")
             output_latents[latent_name] = latent
 
         return output_latents
@@ -261,7 +301,9 @@ class SparseStructureFlowTdfyWrapper(SparseStructureFlowModel):
             for latent_name in latent_names:
                 visited_latent_names.add(latent_name)
                 tensors.append(latent_dict[latent_name])
+                logger.info(f"[SHAPE] SS: MoT merge - adding '{latent_name}' shape: {latent_dict[latent_name].shape}")
             tensors = torch.cat(tensors, dim=1)
+            logger.info(f"[SHAPE] SS: MoT merge - concatenated '{merged_name}' shape: {tensors.shape}")
             return_dict[merged_name] = tensors
 
         for latent_name in latent_dict:
@@ -271,20 +313,27 @@ class SparseStructureFlowTdfyWrapper(SparseStructureFlowModel):
         return return_dict
 
     def split_latent_share_transformer(self, output_latents):
+        logger.info(f"[SHAPE] SS: MoT split - input output_latents keys: {list(output_latents.keys())}")
+        for k, v in output_latents.items():
+            if isinstance(v, torch.Tensor):
+                logger.info(f"[SHAPE] SS: MoT split - '{k}' shape: {v.shape}")
         return_dict = {}
         visited_latent_names = set()
         for merged_name, latent_names in self.latent_share_transformer.items():
             start = 0
             visited_latent_names.add(merged_name)
             tensors = output_latents[merged_name]
+            logger.info(f"[SHAPE] SS: MoT split - splitting '{merged_name}' shape: {tensors.shape} into {latent_names}")
             for latent_name in latent_names:
                 token_len = self.latent_mapping[latent_name].pos_emb.shape[0]
                 latent = tensors[:, start : start + token_len]
+                logger.info(f"[SHAPE] SS: MoT split - extracted '{latent_name}' shape: {latent.shape} (token_len={token_len})")
                 return_dict[latent_name] = latent
                 start += token_len
 
         for latent_name in output_latents:
             if latent_name not in visited_latent_names:
                 return_dict[latent_name] = output_latents[latent_name]
+                logger.info(f"[SHAPE] SS: MoT split - keeping unmerged '{latent_name}' shape: {output_latents[latent_name].shape}")
 
         return return_dict

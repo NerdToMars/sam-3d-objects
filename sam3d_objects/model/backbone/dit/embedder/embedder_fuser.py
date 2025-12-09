@@ -204,15 +204,21 @@ class EmbedderFuser(torch.nn.Module):
         tokens = []
         kwarg_names = []
         
+        logger.info(f"[SHAPE] EmbedderFuser: Starting fusion with {len(self.embedder_list)} embedder(s)")
+        
         for i, (condition_embedder, kwargs_info) in enumerate(self.embedder_list):
             # Ideally, we would batch the inputs; but that assumes same-sized inputs
             for kwarg_name, pos_group in kwargs_info:
                 if kwarg_name not in kwargs:
                     logger.warning(f"{kwarg_name} not in kwargs to condition embedder!")
                 input_cond = kwargs[kwarg_name]
+                if isinstance(input_cond, torch.Tensor):
+                    logger.info(f"[SHAPE] EmbedderFuser: Embedder {i}, input '{kwarg_name}': {input_cond.shape}")
                 cond_token = condition_embedder(input_cond)
+                logger.info(f"[SHAPE] EmbedderFuser: Embedder {i}, '{kwarg_name}' output tokens: {cond_token.shape}")
                 if self.projection_net_hidden_dim_multiplier > 0:
                     cond_token = self.projection_nets[i](cond_token)
+                    logger.info(f"[SHAPE] EmbedderFuser: Embedder {i}, '{kwarg_name}' after projection: {cond_token.shape}")
                 if pos_group is not None:
                     pos_idx = self.positional_embed_map[pos_group]
                     if self.use_pos_embedding == "random":
@@ -223,16 +229,24 @@ class EmbedderFuser(torch.nn.Module):
                         raise NotImplementedError(
                             f"Unknown pos embedding {self.use_pos_embedding}"
                         )
+                    logger.info(f"[SHAPE] EmbedderFuser: Embedder {i}, '{kwarg_name}' after positional embedding (group '{pos_group}'): {cond_token.shape}")
                 tokens.append(cond_token)
                 kwarg_names.append(kwarg_name)
+
+        logger.info(f"[SHAPE] EmbedderFuser: Individual token shapes: {[t.shape for t in tokens]}")
 
         # Apply dropout modalities with preserved order
         tokens = self._dropout_modalities(kwarg_names, tokens)
 
         if self.compression_projection_multiplier > 0:
-            tokens = torch.cat(tokens, dim=-1)
-            tokens = self.compression_projector(tokens)
+            tokens_cat = torch.cat(tokens, dim=-1)
+            logger.info(f"[SHAPE] EmbedderFuser: Concatenated tokens (dim=-1): {tokens_cat.shape}")
+            tokens = self.compression_projector(tokens_cat)
+            logger.info(f"[SHAPE] EmbedderFuser: After compression projection: {tokens.shape}")
         else:
-            tokens = torch.cat(tokens, dim=1)
+            tokens_cat = torch.cat(tokens, dim=1)
+            logger.info(f"[SHAPE] EmbedderFuser: Concatenated tokens (dim=1): {tokens_cat.shape}")
+            tokens = tokens_cat
 
+        logger.info(f"[SHAPE] EmbedderFuser: Final fused tokens shape: {tokens.shape} (B, total_seq_len={tokens.shape[1]}, embed_dim={tokens.shape[2]})")
         return tokens

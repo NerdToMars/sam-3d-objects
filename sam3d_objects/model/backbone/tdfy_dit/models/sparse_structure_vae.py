@@ -308,19 +308,25 @@ class SparseStructureDecoder(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logger.info(f"[SHAPE] SS: SparseStructureDecoder input: {x.shape}")
         if self.reshape_input_to_cube:
             x = self.flat_to_cube(x)
+            logger.info(f"[SHAPE] SS: After flat_to_cube: {x.shape}")
 
         h = self.input_layer(x)
+        logger.info(f"[SHAPE] SS: After input_layer: {h.shape}")
 
         h = h.type(self.dtype)
 
         h = self.middle_block(h)
-        for block in self.blocks:
+        logger.info(f"[SHAPE] SS: After middle_block: {h.shape}")
+        for i, block in enumerate(self.blocks):
             h = block(h)
+        logger.info(f"[SHAPE] SS: After transformer blocks: {h.shape}")
 
         h = h.type(x.dtype)
         h = self.out_layer(h)
+        logger.info(f"[SHAPE] SS: SparseStructureDecoder output: {h.shape}")
         return h
 
     @staticmethod

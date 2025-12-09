@@ -226,6 +226,11 @@ def pose_decoder(
 ):
     def decode(model_output_dict, scene_scale=None, scene_shift=None):
         x = model_output_dict
+        
+        logger.info(f"[SHAPE] SS: Pose decoder input - model_output_dict keys: {list(x.keys())}")
+        for k, v in x.items():
+            if isinstance(v, torch.Tensor):
+                logger.info(f"[SHAPE] SS: Pose decoder input '{k}' shape: {v.shape}")
 
         # BEGIN: copied from generative.py
         key_mapping = {
@@ -318,11 +323,13 @@ def pose_decoder(
             x_scene_scale=pose_target_dict["x_scene_scale"],
             x_scene_center=pose_target_dict["x_scene_center"],
         )
-        return {
+        result = {
             "translation": pose_instance_dict["instance_position_l2c"].squeeze(0),
             "rotation": pose_instance_dict["instance_quaternion_l2c"].squeeze(0),
             "scale": pose_instance_dict["instance_scale_l2c"].squeeze(0).mean(-1, keepdim=True).expand(1,3),
         }
+        logger.info(f"[SHAPE] SS: Pose decoder output - translation: {result['translation'].shape}, rotation: {result['rotation'].shape}, scale: {result['scale'].shape}")
+        return result
 
     return decode
 

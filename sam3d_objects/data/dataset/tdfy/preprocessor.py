@@ -78,6 +78,7 @@ class PreProcessor:
         """Extended version that handles pointmaps"""
  
         # Apply pointmap normalization if enabled
+        # scene scale normalization using ObjectCentricSSI
         pointmap_for_crop, pointmap_scale, pointmap_shift = self._normalize_pointmap(
             pointmap, rgb_image_mask, self.pointmap_normalizer
         )
@@ -87,6 +88,7 @@ class PreProcessor:
 
         # These two are typically used for getting cropped images of the object
         #   : first apply joint transforms
+        # get cropped pointmap
         processed_rgb_image, processed_mask, processed_pointmap = (
             self._preprocess_image_mask_pointmap(rgb_image, rgb_image_mask, pointmap_for_crop)
         )
@@ -139,6 +141,9 @@ class PreProcessor:
                 }
             )
 
+        # log the scale and shift
+        logger.info(f"pointmap_scale: {pointmap_scale}, pointmap_shift: {pointmap_shift}")
+        logger.info(f"rgb_pointmap_scale: {rgb_pointmap_scale}, rgb_pointmap_shift: {rgb_pointmap_shift}")
         return result
 
     def _process_image_and_mask_mess(self, rgb_image, rgb_image_mask):

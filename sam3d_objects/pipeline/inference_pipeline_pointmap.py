@@ -29,9 +29,9 @@ def camera_to_pytorch3d_camera(device="cpu") -> DecomposedTransform:
     Also needed for pointmaps
     """
     r3_to_p3d_R, r3_to_p3d_T = look_at_view_transform(
-        eye=np.array([[0, 0, -1]]),
-        at=np.array([[0, 0, 0]]),
-        up=np.array([[0, -1, 0]]),
+        eye=np.array([[0, 0, -1]]), # [AI] camera at -Z axis
+        at=np.array([[0, 0, 0]]), # [AI] look at origin
+        up=np.array([[0, -1, 0]]), # [AI] up direction is -Y axis
         device=device,
     )
     return DecomposedTransform(
@@ -183,14 +183,26 @@ class InferencePipelinePointMap(InferencePipeline):
         assert image.shape[-1] == 4  # rgba format
         assert image.dtype == np.uint8  # [0,255] range
 
+        logger.info(f"[SHAPE] SS: Raw input image shape: {image.shape} (H, W, 4 RGBA)")
+        if pointmap is not None:
+            logger.info(f"[SHAPE] SS: Input pointmap shape: {pointmap.shape}")
+
         rgba_image = torch.from_numpy(self.image_to_float(image))
         rgba_image = rgba_image.permute(2, 0, 1).contiguous()
         rgb_image = rgba_image[:3]
         rgb_image_mask = get_mask(rgba_image, None, "ALPHA_CHANNEL")
+        
+        logger.info(f"[SHAPE] SS: After permute - rgba_image: {rgba_image.shape}, rgb_image: {rgb_image.shape}, rgb_image_mask: {rgb_image_mask.shape}")
 
         preprocessor_return_dict = preprocessor._process_image_mask_pointmap_mess(
             rgb_image, rgb_image_mask, pointmap
         )
+        
+        logger.info(f"[SHAPE] SS: After preprocessor._process_image_mask_pointmap_mess - image: {preprocessor_return_dict['image'].shape}, mask: {preprocessor_return_dict['mask'].shape}")
+        if "pointmap" in preprocessor_return_dict:
+            logger.info(f"[SHAPE] SS: After preprocessing - pointmap: {preprocessor_return_dict['pointmap'].shape}")
+            if "pointmap_scale" in preprocessor_return_dict:
+                logger.info(f"[SHAPE] SS: Pointmap normalization - scale: {preprocessor_return_dict['pointmap_scale'].shape}, shift: {preprocessor_return_dict['pointmap_shift'].shape}")
         
         # Put in a for loop?
         _item = preprocessor_return_dict
@@ -200,6 +212,8 @@ class InferencePipelinePointMap(InferencePipeline):
             "rgb_image": _item["rgb_image"][None].to(self.device),
             "rgb_image_mask": _item["rgb_image_mask"][None].to(self.device),
         }
+        
+        logger.info(f"[SHAPE] SS: Final preprocessed items - mask: {item['mask'].shape}, image: {item['image'].shape}, rgb_image: {item['rgb_image'].shape}, rgb_image_mask: {item['rgb_image_mask'].shape}")
 
         if pointmap is not None and preprocessor.pointmap_transform != (None,):
             item["pointmap"] = _item["pointmap"][None].to(self.device)
@@ -208,6 +222,9 @@ class InferencePipelinePointMap(InferencePipeline):
             item["pointmap_shift"] = _item["pointmap_shift"][None].to(self.device)
             item["rgb_pointmap_scale"] = _item["rgb_pointmap_scale"][None].to(self.device)
             item["rgb_pointmap_shift"] = _item["rgb_pointmap_shift"][None].to(self.device)
+            
+            logger.info(f"[SHAPE] SS: Pointmap items - pointmap: {item['pointmap'].shape}, rgb_pointmap: {item['rgb_pointmap'].shape}")
+            logger.info(f"[SHAPE] SS: Pointmap normalization items - pointmap_scale: {item['pointmap_scale'].shape}, pointmap_shift: {item['pointmap_shift'].shape}")
 
         return item
 
@@ -227,6 +244,8 @@ class InferencePipelinePointMap(InferencePipeline):
         # Get valid points from the mask
         mask_bool = mask_resized.reshape(-1) > 0.5
         mask_points = pointmap_flat[:, mask_bool]
+        # [AI] mask_points is the points that are valid in the mask
+        # [AI] nanmedian(dim=-1).values[-1] is the median of the last dimension of the mask_points
         mask_distance = mask_points.nanmedian(dim=-1).values[-1]
         logger.info(f"mask_distance: {mask_distance}")
         pointmap_clipped_flat = torch.where(
@@ -242,24 +261,37 @@ class InferencePipelinePointMap(InferencePipeline):
     def compute_pointmap(self, image, pointmap=None):
         loaded_image = self.image_to_float(image)
         loaded_image = torch.from_numpy(loaded_image)
-        loaded_mask = loaded_image[..., -1]
+        # what is [..., -1] ? it selects the last channel of the image
+        loaded_mask = loaded_image[..., -1] # [AI] mask is the last channel of the image
+        # [AI] permute the image to (3, H, W)
+        # [AI] [:3] selects the first 3 channels (RGB) of the permuted image
+        # [AI] contiguous() makes the tensor contiguous in memory
         loaded_image = loaded_image.permute(2, 0, 1).contiguous()[:3]
+        
+        logger.info(f"[SHAPE] SS: Pointmap computation - loaded_image: {loaded_image.shape}, loaded_mask: {loaded_mask.shape}")
 
         if pointmap is None:
             with torch.no_grad():
                 with torch.autocast(device_type="cuda", dtype=self.dtype):
                     output = self.depth_model(loaded_image)
             pointmaps = output["pointmaps"]
+            logger.info(f"[SHAPE] SS: Depth model output - pointmaps: {pointmaps.shape}")
+            # [AI] Pointmaps is output from the depth model, maybe using opencv camera convention?
+            # [AI] convert to pytorch3d camera convention
             camera_convention_transform = (
                 Transform3d()
                 .rotate(camera_to_pytorch3d_camera(device=self.device).rotation)
                 .to(self.device)
             )
             points_tensor = camera_convention_transform.transform_points(pointmaps)
+            logger.info(f"[SHAPE] SS: After camera convention transform - points_tensor: {points_tensor.shape}")
             intrinsics = output.get("intrinsics", None)
+            if intrinsics is not None:
+                logger.info(f"[SHAPE] SS: Depth model intrinsics: {intrinsics.shape}")
         else:
             output = {}
             points_tensor = pointmap.to(self.device)
+            logger.info(f"[SHAPE] SS: Using provided pointmap - initial shape: {points_tensor.shape}")
             if loaded_image.shape != points_tensor.shape:
                 # Interpolate points_tensor to match loaded_image size
                 # loaded_image has shape [3, H, W], we need H and W
@@ -268,16 +300,22 @@ class InferencePipelinePointMap(InferencePipeline):
                     size=(loaded_image.shape[1], loaded_image.shape[2]),
                     mode="nearest",
                 ).squeeze(0).permute(1, 2, 0)
+                logger.info(f"[SHAPE] SS: After interpolation - points_tensor: {points_tensor.shape}")
             intrinsics = None
 
         points_tensor = points_tensor.permute(2, 0, 1)
+        logger.info(f"[SHAPE] SS: After permute to (3, H, W) - points_tensor: {points_tensor.shape}")
+        # select points that are valid in the mask and remove flying points beyond the mask_distance
         points_tensor = self._clip_pointmap(points_tensor, loaded_mask)
+        logger.info(f"[SHAPE] SS: After clipping - points_tensor: {points_tensor.shape}")
         
         # Prepare the point map tensor
         point_map_tensor = {
             "pointmap": points_tensor,
             "pts_color": loaded_image,
         }
+        
+        logger.info(f"[SHAPE] SS: Pointmap tensor dict - pointmap: {point_map_tensor['pointmap'].shape}, pts_color: {point_map_tensor['pts_color'].shape}")
 
         # If depth model doesn't provide intrinsics, infer them
         if intrinsics is None:
@@ -285,6 +323,7 @@ class InferencePipelinePointMap(InferencePipeline):
                 points_tensor.permute(1, 2, 0), device=self.device
             )
             point_map_tensor["intrinsics"] = intrinsics_result["intrinsics"]
+            logger.info(f"[SHAPE] SS: Inferred intrinsics: {point_map_tensor['intrinsics'].shape}")
 
         return point_map_tensor
 

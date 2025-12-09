@@ -195,32 +195,38 @@ class PointPatchEmbed(nn.Module):
         )  # (B, hW, wW, ws, ws, D)
         x = x.permute(0, 1, 3, 2, 4, 5).contiguous()  # (B, hW, wW, ws, ws, D)
         x = x.view(-1, self.patch_size * self.patch_size, self.embed_dim)
+        logger.info(f"[SHAPE] PointPatchEmbed: After reshape to patches - x: {x.shape}")
 
         # (4) CLS token that contains the patch information
         cls_tok = self.cls_token.expand(x.shape[0], -1, -1)
         toks = torch.cat([cls_tok, x], dim=1)
+        logger.info(f"[SHAPE] PointPatchEmbed: After adding CLS token - toks: {toks.shape}")
 
         # (5) add positional embedding for window
         toks = toks + self.pos_embed_window
 
         # (6) intra-window attention
-        for blk in self.blocks:
+        for i, blk in enumerate(self.blocks):
             toks = blk(toks)
+        logger.info(f"[SHAPE] PointPatchEmbed: After transformer blocks - toks: {toks.shape}")
 
         # (7) Extract CLS tokens and reshape to (B, n_windows, embed_dim)
         n_windows_h = H // self.patch_size
         n_windows_w = W // self.patch_size
         window_embeddings = toks[:, 0].view(B, n_windows_h * n_windows_w, self.embed_dim)
+        logger.info(f"[SHAPE] PointPatchEmbed: Window embeddings shape: {window_embeddings.shape} (B={B}, n_windows={n_windows_h * n_windows_w})")
     
         # Add positional embeddings
         pos_embed_patch = self._get_pos_embed((n_windows_h, n_windows_w)).reshape(
             1, n_windows_h * n_windows_w, self.embed_dim
         )
         out = window_embeddings + pos_embed_patch
+        logger.info(f"[SHAPE] PointPatchEmbed: After adding positional embeddings - out: {out.shape}")
         
         # Apply dropout if enabled (during training OR when forced)
         if (self.training or self.force_dropout_always) and self.dropout_prob > 0:
             out = self.apply_pointmap_dropout(out)
+            logger.info(f"[SHAPE] PointPatchEmbed: After dropout - out: {out.shape}")
         
         return out
     
@@ -233,6 +239,12 @@ class PointPatchEmbed(nn.Module):
 
         returns: (B, num_windows, D)
         """
+        logger.info(f"[SHAPE] PointPatchEmbed: Input xyz shape: {xyz.shape}")
+        if valid_mask is not None:
+            logger.info(f"[SHAPE] PointPatchEmbed: Input valid_mask shape: {valid_mask.shape}")
         # Get window embeddings
         x, B, H, W = self.embed_pointmap_windows(xyz, valid_mask)
-        return self.inner_forward(x, B, H, W)
+        logger.info(f"[SHAPE] PointPatchEmbed: After embed_pointmap_windows - x: {x.shape}, B={B}, H={H}, W={W}")
+        out = self.inner_forward(x, B, H, W)
+        logger.info(f"[SHAPE] PointPatchEmbed: Output tokens shape: {out.shape} (B, num_windows={out.shape[1]}, embed_dim={out.shape[2]})")
+        return out

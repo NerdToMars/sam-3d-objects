@@ -150,11 +150,19 @@ class SLatGaussianDecoder(SparseTransformerBase):
         return ret
 
     def forward(self, x: sp.SparseTensor) -> List[Gaussian]:
+        logger.info(f"[SHAPE] SLAT: SLatGaussianDecoder input - SparseTensor coords: {x.coords.shape}, feats: {x.feats.shape}")
         h = super().forward(x)
+        logger.info(f"[SHAPE] SLAT: After super().forward - coords: {h.coords.shape}, feats: {h.feats.shape}")
         h = h.type(x.dtype)
         h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
         h = self.out_layer(h)
-        return self.to_representation(h)
+        logger.info(f"[SHAPE] SLAT: After out_layer - coords: {h.coords.shape}, feats: {h.feats.shape}")
+        gaussians = self.to_representation(h)
+        logger.info(f"[SHAPE] SLAT: Gaussian decoder output - {len(gaussians)} gaussian(s)")
+        if len(gaussians) > 0:
+            g = gaussians[0]
+            logger.info(f"[SHAPE] SLAT: First gaussian attributes - xyz: {g.get_xyz.shape}, features_dc: {g._features_dc.shape}, scaling: {g.get_scaling.shape}, rotation: {g.get_rotation.shape}, opacity: {g.get_opacity.shape}")
+        return gaussians
 
 
 class SLatGaussianDecoderTdfyWrapper(SLatGaussianDecoder):

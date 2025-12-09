@@ -13,6 +13,7 @@ from ..modules.transformer import (
 )
 from ..modules.spatial import patchify, unpatchify
 import warnings
+from loguru import logger
 
 
 DataType = namedtuple("DataType", ["shape", "pose"])
@@ -219,6 +220,8 @@ class SparseStructureFlowModel(nn.Module):
         pose = x.pose
         x = x.shape
 
+        logger.info(f"[SHAPE] SS: SparseStructureFlowModel input - x.shape: {x.shape}, pose: {pose.shape if pose is not None else None}, t: {t.shape}, cond: {cond.shape}")
+
         assert [*x.shape] == [
             x.shape[0],
             self.in_channels,
@@ -227,30 +230,39 @@ class SparseStructureFlowModel(nn.Module):
 
         h = patchify(x, self.patch_size)
         h = h.view(*h.shape[:2], -1).permute(0, 2, 1).contiguous()
+        logger.info(f"[SHAPE] SS: After patchify and reshape - h: {h.shape}")
         if self.include_pose:
             h = torch.cat([h, pose], dim=1)
+            logger.info(f"[SHAPE] SS: After concatenating pose - h: {h.shape}")
 
         h = self.input_layer(h)
         h = h + self.pos_emb[None]
+        logger.info(f"[SHAPE] SS: After input_layer and pos_emb - h: {h.shape}")
         t_emb = self.t_embedder(t)
+        logger.info(f"[SHAPE] SS: Timestep embedding - t_emb: {t_emb.shape}")
         if self.share_mod:
             t_emb = self.adaLN_modulation(t_emb)
         t_emb = t_emb.type(self.dtype)
         h = h.type(self.dtype)
         cond = cond.type(self.dtype)
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             h = block(h, t_emb, cond)
+        logger.info(f"[SHAPE] SS: After transformer blocks - h: {h.shape}")
         h = h.type(x.dtype)
         h = F.layer_norm(h, h.shape[-1:])
         h = self.out_layer(h)
+        logger.info(f"[SHAPE] SS: After out_layer - h: {h.shape}")
         if self.include_pose:
             pose = h[:, -1:]
             h = h[:, :-1]
+            logger.info(f"[SHAPE] SS: After splitting pose - h: {h.shape}, pose: {pose.shape}")
 
         h = h.permute(0, 2, 1).view(
             h.shape[0], h.shape[2], *[self.resolution // self.patch_size] * 3
         )
+        logger.info(f"[SHAPE] SS: After permute and view - h: {h.shape}")
         h = unpatchify(h, self.patch_size).contiguous()
+        logger.info(f"[SHAPE] SS: After unpatchify - h: {h.shape}")
         return DataType(h, pose)
 
 

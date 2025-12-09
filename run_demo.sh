@@ -4,7 +4,7 @@
 #SBATCH --error=demo_%j.err
 #SBATCH --time=02:00:00          # Adjust based on your needs
 #SBATCH --cpus-per-task=32 
-#SBATCH --gres=gpu:2              # Request 1 GPU
+#SBATCH --gres=gpu:2              # Request 2 GPU
 #SBATCH --partition=RTXA6Kq           # Change to your GPU partition name
 
 # Load necessary modules (adjust based on your HPC setup)
